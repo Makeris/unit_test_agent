@@ -1,101 +1,95 @@
-from dotenv import load_dotenv
+"""CLI entry point for the test generator agent."""
 
+import asyncio
+import os
+import sys
+
+# Add the project root to sys.path so imports work when run from any directory
+_project_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _project_dir)
+
+from dotenv import load_dotenv
 load_dotenv()
 
-import os
-import asyncio
-import subprocess
-
-from autogen_agentchat.agents import AssistantAgent
-from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.ui import Console
-from autogen_ext.models.openai import OpenAIChatCompletionClient
+from agents.test_writer import create_test_writer_agent
+from config import TEST_OUTPUT_DIR
+
+# ====================================================================
+# YOUR PROMPT — edit this variable and run: python main.py
+# ====================================================================
+# PROMPT = "Write me tests for this repository def factorial(n): if n == 0 or n == 1: return 1 return n * factorial(n - 1)"
+PROMPT = "Write me tests for this repository https://github.com/nedbat/pkgsample"
+# PROMPT = "Write me tests for this repository https://github.com/TheAlgorithms/Python"
+# ====================================================================
 
 
-def run_tests(file_path="test_main.py"):
-    try:
-        result = subprocess.run(
-            ["python", "-m", "pytest", file_path], capture_output=True, text=True
-        )
-        return result.stdout + "\n" + result.stderr
-    except Exception as e:
-        return str(e)
+def _ensure_tests_dir():
+    """Create the tests/ output directory if it doesn't exist."""
+    os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
 
 
-def chunk_code(source_code: str, max_lines: int = 200):
-    lines = source_code.splitlines()
-    for i in range(0, len(lines), max_lines):
-        yield "\n".join(lines[i : i + max_lines])
+def _list_test_files():
+    """Return list of .py test files in tests/ directory."""
+    if not os.path.isdir(TEST_OUTPUT_DIR):
+        return []
+    return [f for f in os.listdir(TEST_OUTPUT_DIR) if f.startswith("test_") and f.endswith(".py")]
 
 
-def write_code_to_file(prepared_code: str):
-    with open("test_main.py", "w", encoding="utf-8") as f:
-        f.write(prepared_code)
+async def async_main() -> None:
+    if not os.environ.get("OPENAI_API_KEY"):
+        print("Error: OPENAI_API_KEY not set. Check your .env file.", file=sys.stderr)
+        sys.exit(1)
 
+    prompt = PROMPT.strip()
+    if not prompt:
+        print("Error: PROMPT is empty. Edit main.py and write your request.", file=sys.stderr)
+        sys.exit(1)
 
-async def main():
-    model_client = OpenAIChatCompletionClient(
-        model="gpt-4o-mini", api_key=os.environ["OPENAI_API_KEY"], temperature=0.2
-    )
+    _ensure_tests_dir()
+    files_before = set(_list_test_files())
 
-    assistant = AssistantAgent(
-        "assistant",
-        tools=[write_code_to_file],
-        description="Agent that generates unit tests for provided code",
-        model_client=model_client,
-        system_message="""
-        Generate pytest tests in class format for given code.
-        - Remove explanations and markers.
-        - Use unittest.mock for external dependencies.
-        - Provide meaningful sample data.
-        - If the file is a controller, include request/response samples.
-        - If the file is a service, test business logic with mocks.
-        - If the file is a repository, mock database interactions.
-        - Don't import external dependency.
-        """,
-    )
+    print(f"Prompt:\n{prompt}")
+    print("=" * 60)
 
-    team = RoundRobinGroupChat([assistant], max_turns=5)
+    agent = create_test_writer_agent()
+    await Console(agent.run_stream(task=prompt), output_stats=True)
 
-    # source_code = """ import requests def fetch_data(url: str) -> dict: response = requests.get(url) response.raise_for_status() return response.json() """
-    source_code = """ import sqlite3 def get_user_by_id(user_id: int) -> dict: conn = sqlite3.connect("users.db") cursor = conn.cursor() cursor.execute("SELECT id, name FROM users WHERE id=?", (user_id,)) row = cursor.fetchone() conn.close() if row: return {"id": row[0], "name": row[1]} return None """
-    source_code_time = """ import datetime def get_current_year() -> int: return datetime.datetime.now().year """  # Функція з логером
-    source_code_logger = """ import logging logger = logging.getLogger(__name__) def process_item(item: str) -> str: logger.info("Processing item: %s", item) return item.upper() """
+    # Show what was generated
+    files_after = set(_list_test_files())
+    new_files = files_after - files_before
+    if new_files:
+        print("\n" + "=" * 60)
+        print(f"Generated test files in {TEST_OUTPUT_DIR}:")
+        for f in sorted(new_files):
+            print(f"  - {f}")
+    else:
+        print("\n" + "=" * 60)
+        print(f"WARNING: No new test files were created in {TEST_OUTPUT_DIR}")
+        print("The agent may have output tests as text instead of saving them.")
+        print("Try giving feedback below to ask the agent to save the tests.")
 
-    test_file_content = ""
-    for chunk in chunk_code(source_code_logger, max_lines=200):
-        task = f"Generate pytest unit tests for this code:\n{chunk}, prepare it and write it to file clear without any markers and other unneeded elements. Write for required methods internal implementation inside file"
-        stream = team.run_stream(task=task)
-        await Console(stream)
-
-        result = await assistant.run(task=task)
-        if result.messages:
-            response_text = result.messages[-1].content
-        else:
-            response_text = str(result)
-
-        test_file_content += "\n" + response_text
-
+    # Feedback loop — ask user for follow-up instructions
     while True:
-        feedback = run_tests("test_main.py")
-        print(feedback)
-
-        task = input("Enter feedback for agent (or type 'exit'): ")
-        if task.lower().strip() == "exit":
+        print("\n" + "=" * 60)
+        try:
+            feedback = input("Your feedback (or 'exit' to quit): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting.")
             break
 
-        fix_task = f"Fix the unit tests based on this pytest output:\n{feedback}\nUser feedback: {task}"
+        if not feedback or feedback.lower() in ("exit", "quit", "q"):
+            print("Done.")
+            break
 
-        result = await assistant.run(task=fix_task)
+        await Console(agent.run_stream(task=feedback), output_stats=True)
 
-        if result.messages:
-            response_text = result.messages[-1].content
-        else:
-            response_text = str(result)
-
-        print(response_text)
-    await model_client.close()
+        files_now = set(_list_test_files())
+        new_after_feedback = files_now - files_after
+        if new_after_feedback:
+            print(f"\nNew test files: {', '.join(sorted(new_after_feedback))}")
+            files_after = files_now
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(async_main())
