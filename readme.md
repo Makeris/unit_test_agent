@@ -12,5 +12,6 @@ This project provides a CLI entry point for a test generator agent that uses Ope
 ## Local Setup
 
 1. Clone or download the repository.
-2. Create a `.env` file in the project root with your OpenAI API key:
-3. Run "main.py" file.
+2. Install required dependency (for example from `requirements.txt`).
+3. Create a `.env` file in the project root with your OpenAI API key:
+4. Run "main.py" file.
