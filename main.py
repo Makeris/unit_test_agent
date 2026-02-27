@@ -18,8 +18,8 @@ from config import TEST_OUTPUT_DIR
 # ====================================================================
 # YOUR PROMPT — edit this variable and run: python main.py
 # ====================================================================
-# PROMPT = "Write me tests for this repository def factorial(n): if n == 0 or n == 1: return 1 return n * factorial(n - 1)"
-PROMPT = "Write me tests for this repository https://github.com/nedbat/pkgsample"
+PROMPT = "Write me tests for this repository def factorial(n): if n == 0 or n == 1: return 1 return n * factorial(n - 1)"
+# PROMPT = "Write me tests for this repository https://github.com/nedbat/pkgsample"
 # PROMPT = "Write me tests for this repository https://github.com/TheAlgorithms/Python"
 # ====================================================================
 
